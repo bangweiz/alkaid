@@ -1,0 +1,48 @@
+# --- Binaries and Executables ---
+# Ignore all executable files (common patterns)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.bin
+
+# If you output your builds to a specific folder (highly recommended)
+bin/
+dist/
+
+# --- Go Specific ---
+# Ignore coverage files
+*.out
+*.test
+*.prof
+coverage.html
+
+# If you use the 'vendor' directory (Optional)
+# Note: Some teams prefer to commit 'vendor' for reproducible builds.
+# If you want to commit it, comment the line below.
+# vendor/
+
+# --- Environment & Secrets (CRITICAL) ---
+.env
+.env.local
+*.pem
+*.key
+*.cert
+
+# --- IDEs and Editors ---
+# JetBrains (GoLand, IntelliJ)
+.idea/
+
+# VS Code
+.vscode/
+!.vscode/settings.json  # Optional: allow settings if they are team-standard
+!.vscode/extensions.json
+
+# Vim / Emacs
+*.swp
+*~
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
