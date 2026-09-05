@@ -1,4 +1,4 @@
-module alkaid
+module github.com/bangweiz/alkaid
 
 go 1.26.4
 
