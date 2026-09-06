@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -13,35 +12,20 @@ import (
 	"github.com/bangweiz/alkaid/internal/llm"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
-	"github.com/yuin/goldmark"
-	"github.com/yuin/goldmark/ast"
-	"github.com/yuin/goldmark/extension"
-	"github.com/yuin/goldmark/parser"
-	"github.com/yuin/goldmark/text"
 )
 
 type Renderer struct {
 	stopThinkingAnimation func()
 	markdown              *glamour.TermRenderer
-	parser                parser.Parser
 	output                io.Writer
 }
 
-// NewRenderer initializes a Markdown renderer for the current terminal width.
 func NewRenderer() (*Renderer, error) {
-	width := terminalWidth()
-	markdown, err := glamour.NewTermRenderer(
-		glamour.WithStylePath("light"),
-		glamour.WithWordWrap(width),
-	)
+	markdown, err := glamour.NewTermRenderer(glamour.WithStylePath("light"), glamour.WithWordWrap(terminalWidth()))
 	if err != nil {
 		return nil, err
 	}
-	return &Renderer{
-		markdown: markdown,
-		parser:   goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser(),
-		output:   os.Stdout,
-	}, nil
+	return &Renderer{markdown: markdown, output: os.Stdout}, nil
 }
 
 func terminalWidth() int {
@@ -51,31 +35,31 @@ func terminalWidth() int {
 	}
 	return width
 }
+func terminalHeight() int {
+	_, height, err := term.GetSize(os.Stdout.Fd())
+	if err != nil || height <= 0 {
+		return 24
+	}
+	return height
+}
 
-// startThinking animates a waiting indicator until response text is rendered.
 func (r *Renderer) startThinking() {
 	r.stopThinking()
-	stop := make(chan struct{})
-	done := make(chan struct{})
+	stop, done := make(chan struct{}), make(chan struct{})
 	var once sync.Once
-	r.stopThinkingAnimation = func() {
-		once.Do(func() { close(stop) })
-		<-done
-	}
+	r.stopThinkingAnimation = func() { once.Do(func() { close(stop) }); <-done }
 	fmt.Fprint(r.output, "\r⠋ Thinking…")
 	go func() {
 		defer close(done)
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
-		frame := 0
-		for {
+		for frame := 0; ; frame = (frame + 1) % len(frames) {
 			select {
 			case <-stop:
 				fmt.Fprint(r.output, "\r\x1b[2K")
 				return
 			case <-ticker.C:
-				frame = (frame + 1) % len(frames)
 				fmt.Fprintf(r.output, "\r%s Thinking…", frames[frame])
 			}
 		}
@@ -89,57 +73,96 @@ func (r *Renderer) stopThinking() {
 	}
 }
 
-// RenderResponseStream appends completed Markdown blocks once. The unfinished
-// block stays buffered because new tokens can change its layout and highlighting.
-func (r *Renderer) RenderResponseStream(responseStream <-chan llm.ChatResponse) {
+// RenderResponseStream redraws only the active response. Earlier responses are
+// never revisited, so they remain intact in normal terminal scrollback.
+func (r *Renderer) RenderResponseStream(stream <-chan llm.ChatResponse) {
 	r.startThinking()
 	defer r.stopThinking()
-
-	var buffer bytes.Buffer
-	dirty := false
+	var source strings.Builder
+	state := responseRenderState{height: terminalHeight()}
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
-
 	for {
 		select {
-		case chunk, ok := <-responseStream:
+		case chunk, ok := <-stream:
 			if !ok {
-				r.renderPending(&buffer, true)
+				state.render(r, source.String())
 				return
 			}
-
 			if chunk.Message.Content != "" {
-				buffer.WriteString(chunk.Message.Content)
-				dirty = true
+				source.WriteString(chunk.Message.Content)
 			}
-
 		case <-ticker.C:
-			if dirty {
-				r.renderPending(&buffer, false)
-				dirty = false
+			if source.Len() > 0 {
+				state.render(r, source.String())
 			}
 		}
 	}
 }
 
-func (r *Renderer) renderPending(buffer *bytes.Buffer, final bool) {
-	end := buffer.Len()
-	if !final {
-		end = r.completedPrefix(buffer.Bytes())
-	}
-	if end == 0 {
-		return
-	}
-	glamouredOutput, err := r.markdown.Render(string(buffer.Next(end)))
+type responseRenderState struct {
+	previous          string
+	lines             []string
+	committed, height int
+}
+
+func (s *responseRenderState) render(r *Renderer, source string) {
+	rendered, err := r.markdown.Render(source)
 	if err != nil {
 		panic(err)
 	}
-	r.stopThinking()
-	fmt.Fprint(r.output, compactMarkdown(glamouredOutput))
+	rendered = compactMarkdown(rendered)
+	if rendered == s.previous {
+		return
+	}
+	newLines := responseLines(rendered)
+	if s.height < 1 {
+		s.height = 24
+	}
+	if len(newLines)-s.committed > s.height {
+		s.committed = len(newLines) - s.height
+	}
+	oldStart := min(s.committed, len(s.lines))
+	newStart := min(s.committed, len(newLines))
+	oldVisible, newVisible := s.lines[oldStart:], newLines[newStart:]
+	first := commonPrefix(oldVisible, newVisible)
+	if first == len(oldVisible) && strings.HasPrefix(rendered, s.previous) {
+		r.stopThinking()
+		fmt.Fprint(r.output, rendered[len(s.previous):])
+	} else {
+		if up := len(oldVisible) - first; up > 0 {
+			fmt.Fprintf(r.output, "\x1b[%dA", up)
+		}
+		fmt.Fprint(r.output, "\r\x1b[J")
+		r.stopThinking()
+		fmt.Fprint(r.output, strings.Join(newVisible[first:], ""))
+	}
+	s.previous, s.lines = rendered, newLines
 }
 
-// Glamour pads lines to the wrap width, but tabs occupy additional terminal
-// columns. Remove that padding without stripping color or code indentation.
+func responseLines(rendered string) []string {
+	if rendered == "" {
+		return nil
+	}
+	rendered = strings.TrimSuffix(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
+	parts := strings.Split(rendered, "\n")
+	lines := make([]string, len(parts))
+	for i, line := range parts {
+		lines[i] = line + "\r\n"
+	}
+	return lines
+}
+
+func commonPrefix(a, b []string) int {
+	n := min(len(a), len(b))
+	for i := range n {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return n
+}
+
 func compactMarkdown(rendered string) string {
 	lines := strings.Split(strings.ReplaceAll(rendered, "\r\n", "\n"), "\n")
 	for i, line := range lines {
@@ -160,21 +183,4 @@ func compactMarkdown(rendered string) string {
 		return ""
 	}
 	return strings.Join(lines, "\r\n") + ansi.ResetStyle + "\r\n\r\n"
-}
-
-// A new top-level paragraph or heading gives an unambiguous source boundary.
-// Keep other trailing blocks buffered: fences, lists and tables can still grow.
-func (r *Renderer) completedPrefix(source []byte) int {
-	last := r.parser.Parse(text.NewReader(source)).LastChild()
-	if last == nil || last.PreviousSibling() == nil {
-		return 0
-	}
-	switch last.(type) {
-	case *ast.Paragraph, *ast.Heading:
-		if last.Lines().Len() > 0 {
-			start := last.Lines().At(0).Start
-			return bytes.LastIndexByte(source[:start], '\n') + 1
-		}
-	}
-	return 0
 }
