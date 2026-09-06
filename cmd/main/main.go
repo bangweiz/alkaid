@@ -1,7 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strings"
 
 	"github.com/bangweiz/alkaid/internal/llm"
 	"github.com/bangweiz/alkaid/internal/llm/ollama"
@@ -15,17 +21,37 @@ func main() {
 		panic(err)
 	}
 
-	req := llm.ChatRequest{
-		Model: "gemma4:26b",
-		Messages: []llm.Message{
-			{"user", "How to fire an HTTP call in Rust?"},
-		},
-	}
+	input := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print("> ")
+		line, err := input.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			fmt.Fprintln(os.Stderr, "Read input:", err)
+			os.Exit(1)
+		}
+		message := strings.TrimSpace(line)
+		if message == "/exit" || (message == "" && errors.Is(err, io.EOF)) {
+			return
+		}
+		if message == "" {
+			continue
+		}
 
-	stream, err := ollamaClient.Chat(context.Background(), req)
-	if err != nil {
-		panic(err)
-	}
+		req := llm.ChatRequest{
+			Model: "gemma4:26b",
+			Messages: []llm.Message{
+				{Role: "user", Content: message},
+			},
+		}
 
-	renderer.RenderResponseStream(stream)
+		stream, chatErr := ollamaClient.Chat(context.Background(), req)
+		if chatErr != nil {
+			panic(chatErr)
+		}
+		renderer.RenderResponseStream(stream)
+		fmt.Println()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+	}
 }
