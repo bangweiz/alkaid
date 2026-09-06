@@ -16,25 +16,24 @@ type Client struct {
 }
 
 func (c *Client) Chat(ctx context.Context, req llm.ChatRequest) (<-chan llm.ChatResponse, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
 	stream := make(chan llm.ChatResponse)
 
-	client := &http.Client{
-		Timeout: 1 * time.Minute,
-	}
-
-	res, err := client.Post("http://localhost:11434/api/chat", "application/json", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-
-	decoder := json.NewDecoder(res.Body)
-
 	go func() {
+		body, err := json.Marshal(req)
+		if err != nil {
+			close(stream)
+		}
+
+		client := &http.Client{
+			Timeout: 1 * time.Minute,
+		}
+
+		res, err := client.Post("http://localhost:11434/api/chat", "application/json", bytes.NewReader(body))
+		if err != nil {
+			close(stream)
+		}
+
+		decoder := json.NewDecoder(res.Body)
 		defer res.Body.Close()
 
 		for {

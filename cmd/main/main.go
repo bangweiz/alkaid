@@ -10,6 +10,10 @@ import (
 
 func main() {
 	var ollamaClient ollama.Client
+	renderer, err := tui.NewRenderer()
+	if err != nil {
+		panic(err)
+	}
 
 	req := llm.ChatRequest{
 		Model: "gemma4:26b",
@@ -23,6 +27,5 @@ func main() {
 		panic(err)
 	}
 
-	var renderer tui.Renderer
 	renderer.RenderResponseStream(stream)
 }
