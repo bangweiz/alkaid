@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 
-	"github.com/bangweiz/alkaid/internal/provider/gemini"
+	"github.com/bangweiz/alkaid/internal/agents"
+	"github.com/bangweiz/alkaid/internal/llm"
+	"github.com/bangweiz/alkaid/internal/llm/gemini"
 	"github.com/joho/godotenv"
 )
 
@@ -19,29 +20,11 @@ func main() {
 	url := os.Getenv("GEMINI_URL")
 	apiKey := os.Getenv("GEMINI_KEY")
 
-	client := gemini.NewClient(url, apiKey)
-	req := gemini.NewInteractionRequest(gemini.ModelGemini35FlashLite, "How does AI work?")
+	rawClient := gemini.NewClient(url, apiKey)
+	adapter := llm.NewGeminiAdapter(rawClient)
+	agent := agents.NewCodingAgent(adapter)
 
-	eventChan, err := client.CreateInteraction(context.Background(), &req)
-	if err != nil {
-		panic(err)
-	}
-
-	for result := range eventChan {
-		if result.Error != nil {
-			log.Printf("Stream error: %v\n", result.Error)
-			break
-		}
-
-		switch ev := result.Event.(type) {
-		case *gemini.StepDeltaEvent:
-			if ev.Delta.Type == "text" {
-				fmt.Print(ev.Delta.Text)
-			}
-		case *gemini.InteractionCompletedEvent:
-			fmt.Printf("\n\nFinished! Tokens: %d\n", ev.Interaction.Usage.TotalTokens)
-		case *gemini.StreamErrorEvent:
-			log.Printf("\nAPI Error: %s\n", ev.Error.Message)
-		}
+	if err := agent.Prompt(context.Background(), "How does Go handle garbage collection?"); err != nil {
+		log.Fatalf("Prompt failed: %v", err)
 	}
 }
