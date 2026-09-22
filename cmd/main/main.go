@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 
-	"charm.land/glamour/v2"
 	"github.com/bangweiz/alkaid/internal/provider/gemini"
 	"github.com/joho/godotenv"
 )
@@ -23,18 +22,26 @@ func main() {
 	client := gemini.NewClient(url, apiKey)
 	req := gemini.NewInteractionRequest(gemini.ModelGemini35FlashLite, "How does AI work?")
 
-	interaction, err := client.CreateInteraction(context.Background(), &req)
+	eventChan, err := client.CreateInteraction(context.Background(), &req)
 	if err != nil {
 		panic(err)
 	}
 
-	for _, step := range interaction.Steps {
-		for _, content := range step.Content {
-			output, err := glamour.Render(content.Text, "light")
-			if err != nil {
-				panic(err)
+	for result := range eventChan {
+		if result.Error != nil {
+			log.Printf("Stream error: %v\n", result.Error)
+			break
+		}
+
+		switch ev := result.Event.(type) {
+		case *gemini.StepDeltaEvent:
+			if ev.Delta.Type == "text" {
+				fmt.Print(ev.Delta.Text)
 			}
-			fmt.Print(output)
+		case *gemini.InteractionCompletedEvent:
+			fmt.Printf("\n\nFinished! Tokens: %d\n", ev.Interaction.Usage.TotalTokens)
+		case *gemini.StreamErrorEvent:
+			log.Printf("\nAPI Error: %s\n", ev.Error.Message)
 		}
 	}
 }

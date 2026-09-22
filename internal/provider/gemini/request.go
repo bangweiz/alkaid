@@ -31,8 +31,9 @@ type GenerationConfig struct {
 
 func NewInteractionRequest(model Model, input string) InteractionRequest {
 	req := InteractionRequest{
-		Model: model,
-		Input: input,
+		Model:  model,
+		Input:  input,
+		Stream: true,
 	}
 
 	return req

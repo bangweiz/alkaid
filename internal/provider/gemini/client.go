@@ -1,11 +1,14 @@
 package gemini
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,7 +35,12 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest) (*InteractionResponse, error) {
+type StreamEventResult struct {
+	Event any
+	Error error
+}
+
+func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest) (<-chan StreamEventResult, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -51,21 +59,50 @@ func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return nil, err
+		defer resp.Body.Close()
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("gemini: api error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	var response InteractionResponse
-	if err := json.Unmarshal(bodyBytes, &response); err != nil {
-		return nil, err
-	}
+	eventChan := make(chan StreamEventResult)
+	go func() {
+		defer resp.Body.Close()
+		defer close(eventChan)
 
-	return &response, nil
+		reader := bufio.NewReader(resp.Body)
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err != io.EOF {
+					eventChan <- StreamEventResult{Error: err}
+				}
+				return
+			}
+
+			line = strings.TrimSpace(line)
+
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+
+			if data == "[DONE]" {
+				return
+			}
+
+			event, err := UnmarshalStreamEvent([]byte(data))
+			if err != nil {
+				eventChan <- StreamEventResult{Error: fmt.Errorf("gemini: parse event error: %w", err)}
+				continue
+			}
+
+			eventChan <- StreamEventResult{Event: event}
+		}
+	}()
+
+	return eventChan, nil
 }
