@@ -1,57 +1,40 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
-	"io"
+	"log"
 	"os"
-	"strings"
 
-	"github.com/bangweiz/alkaid/internal/llm"
-	"github.com/bangweiz/alkaid/internal/llm/ollama"
-	"github.com/bangweiz/alkaid/internal/tui"
+	"charm.land/glamour/v2"
+	"github.com/bangweiz/alkaid/internal/provider/gemini"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	var ollamaClient ollama.Client
-	renderer, err := tui.NewRenderer()
+	err := godotenv.Load()
+	if err != nil {
+		log.Println("Warning: .env file not found, relying on system environment variables")
+	}
+
+	url := os.Getenv("GEMINI_URL")
+	apiKey := os.Getenv("GEMINI_KEY")
+
+	client := gemini.NewClient(url, apiKey)
+	req := gemini.NewInteractionRequest(gemini.ModelGemini35FlashLite, "How does AI work?")
+
+	interaction, err := client.CreateInteraction(context.Background(), &req)
 	if err != nil {
 		panic(err)
 	}
 
-	input := bufio.NewReader(os.Stdin)
-	for {
-		fmt.Print("> ")
-		line, err := input.ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
-			fmt.Fprintln(os.Stderr, "Read input:", err)
-			os.Exit(1)
-		}
-		message := strings.TrimSpace(line)
-		if message == "/exit" || (message == "" && errors.Is(err, io.EOF)) {
-			return
-		}
-		if message == "" {
-			continue
-		}
-
-		req := llm.ChatRequest{
-			Model: "gemma4:26b",
-			Messages: []llm.Message{
-				{Role: "user", Content: message},
-			},
-		}
-
-		stream, chatErr := ollamaClient.Chat(context.Background(), req)
-		if chatErr != nil {
-			panic(chatErr)
-		}
-		renderer.RenderResponseStream(stream)
-		fmt.Println()
-		if errors.Is(err, io.EOF) {
-			return
+	for _, step := range interaction.Steps {
+		for _, content := range step.Content {
+			output, err := glamour.Render(content.Text, "light")
+			if err != nil {
+				panic(err)
+			}
+			fmt.Print(output)
 		}
 	}
 }
