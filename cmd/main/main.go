@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/bangweiz/alkaid/internal/agents"
-	"github.com/bangweiz/alkaid/internal/llm"
 	"github.com/bangweiz/alkaid/internal/llm/gemini"
 	"github.com/joho/godotenv"
 )
@@ -20,9 +19,8 @@ func main() {
 	url := os.Getenv("GEMINI_URL")
 	apiKey := os.Getenv("GEMINI_KEY")
 
-	rawClient := gemini.NewClient(url, apiKey)
-	adapter := llm.NewGeminiAdapter(rawClient)
-	agent := agents.NewCodingAgent(adapter)
+	client := gemini.NewClient(url, apiKey)
+	agent := agents.NewCodingAgent(client)
 
 	if err := agent.Prompt(context.Background(), "How does Go handle garbage collection?"); err != nil {
 		log.Fatalf("Prompt failed: %v", err)
