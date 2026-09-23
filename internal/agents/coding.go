@@ -9,11 +9,11 @@ import (
 )
 
 type CodingAgent struct {
-	provider llm.Provider
+	client llm.Client
 }
 
-func NewCodingAgent(p llm.Provider) *CodingAgent {
-	return &CodingAgent{provider: p}
+func NewCodingAgent(client llm.Client) *CodingAgent {
+	return &CodingAgent{client: client}
 }
 
 func (a *CodingAgent) Prompt(ctx context.Context, text string) error {
@@ -25,20 +25,21 @@ func (a *CodingAgent) Prompt(ctx context.Context, text string) error {
 		},
 	}
 
-	stream, err := a.provider.Stream(ctx, req)
+	stream, err := a.client.Stream(ctx, req)
 	if err != nil {
 		return err
 	}
 
 	for chunk := range stream {
-		if chunk.Error != nil {
-			return chunk.Error
+		if err := chunk.Err(); err != nil {
+			return err
 		}
-		if chunk.IsDone {
-			fmt.Printf("\n[Done - Tokens: %d]\n", chunk.OutputTokens)
+		if chunk.Done() {
+			_, outputTokens := chunk.TokenUsage()
+			fmt.Printf("\n[Done - Tokens: %d]\n", outputTokens)
 			break
 		}
-		fmt.Print(chunk.Text)
+		fmt.Print(chunk.Text())
 	}
 
 	return nil

@@ -23,18 +23,11 @@ type Request struct {
 	SessionID   string
 }
 
-type Response struct {
-	Text         string
-	SessionID    string
-	InputTokens  int
-	OutputTokens int
-	TotalTokens  int
-}
-
-type StreamEvent struct {
-	Text         string
-	IsDone       bool
-	InputTokens  int
-	OutputTokens int
-	Error        error
+// StreamOutput describes the behavior consumers need from a streamed model
+// response. Each model client can return its own concrete output types.
+type StreamOutput interface {
+	Text() string
+	Done() bool
+	TokenUsage() (input, output int)
+	Err() error
 }

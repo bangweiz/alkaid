@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/bangweiz/alkaid/internal/llm"
 )
 
 const (
@@ -35,15 +37,13 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-type StreamEventResult struct {
-	Event any
-	Error error
-}
-
-func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest) (<-chan StreamEventResult, error) {
-	payload, err := json.Marshal(req)
+// Stream implements the text-generation behavior needed by agents while
+// keeping Gemini-specific request and event types inside this package.
+func (c *Client) Stream(ctx context.Context, req llm.Request) (<-chan llm.StreamOutput, error) {
+	geminiReq := toInteractionRequest(req)
+	payload, err := json.Marshal(geminiReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gemini: marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(payload))
@@ -57,7 +57,7 @@ func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gemini: send request: %w", err)
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
@@ -66,7 +66,7 @@ func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest)
 		return nil, fmt.Errorf("gemini: api error (status %d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
-	eventChan := make(chan StreamEventResult)
+	eventChan := make(chan llm.StreamOutput)
 	go func() {
 		defer resp.Body.Close()
 		defer close(eventChan)
@@ -77,7 +77,7 @@ func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest)
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					eventChan <- StreamEventResult{Error: err}
+					eventChan <- &StreamErrorEvent{cause: err}
 				}
 				return
 			}
@@ -96,13 +96,37 @@ func (c *Client) CreateInteraction(ctx context.Context, req *InteractionRequest)
 
 			event, err := UnmarshalStreamEvent([]byte(data))
 			if err != nil {
-				eventChan <- StreamEventResult{Error: fmt.Errorf("gemini: parse event error: %w", err)}
+				eventChan <- &StreamErrorEvent{cause: fmt.Errorf("gemini: parse event error: %w", err)}
 				continue
 			}
 
-			eventChan <- StreamEventResult{Event: event}
+			if output, ok := event.(llm.StreamOutput); ok {
+				eventChan <- output
+			}
 		}
 	}()
 
 	return eventChan, nil
+}
+
+func toInteractionRequest(req llm.Request) InteractionRequest {
+	var systemInstruction string
+	var userInput strings.Builder
+
+	for _, message := range req.Messages {
+		if message.Role == llm.RoleSystem {
+			systemInstruction = message.Content
+			continue
+		}
+		userInput.WriteString(message.Content)
+		userInput.WriteByte('\n')
+	}
+
+	return InteractionRequest{
+		Model:                 Model(req.Model),
+		SystemInstruction:     systemInstruction,
+		Input:                 strings.TrimSpace(userInput.String()),
+		PreviousInteractionID: req.SessionID,
+		Stream:                true,
+	}
 }

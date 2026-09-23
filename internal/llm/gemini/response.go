@@ -1,6 +1,9 @@
 package gemini
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type StreamEventType string
 
@@ -55,6 +58,17 @@ type StepDeltaEvent struct {
 	Delta     StepDelta       `json:"delta"`
 }
 
+func (e *StepDeltaEvent) Text() string {
+	if e.Delta.Type != "text" {
+		return ""
+	}
+	return e.Delta.Text
+}
+
+func (*StepDeltaEvent) Done() bool                      { return false }
+func (*StepDeltaEvent) TokenUsage() (input, output int) { return 0, 0 }
+func (*StepDeltaEvent) Err() error                      { return nil }
+
 type StepDelta struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
@@ -85,6 +99,13 @@ type InteractionCompletedEvent struct {
 	Interaction CompletedInteractionDetail `json:"interaction"`
 }
 
+func (*InteractionCompletedEvent) Text() string { return "" }
+func (*InteractionCompletedEvent) Done() bool   { return true }
+func (e *InteractionCompletedEvent) TokenUsage() (input, output int) {
+	return e.Interaction.Usage.TotalInputTokens, e.Interaction.Usage.TotalOutputTokens
+}
+func (*InteractionCompletedEvent) Err() error { return nil }
+
 type CompletedInteractionDetail struct {
 	ID          string      `json:"id"`
 	Status      string      `json:"status"`
@@ -114,6 +135,17 @@ type InputTokensByModality struct {
 type StreamErrorEvent struct {
 	EventType StreamEventType `json:"event_type"`
 	Error     StreamErrorData `json:"error"`
+	cause     error
+}
+
+func (*StreamErrorEvent) Text() string                    { return "" }
+func (*StreamErrorEvent) Done() bool                      { return false }
+func (*StreamErrorEvent) TokenUsage() (input, output int) { return 0, 0 }
+func (e *StreamErrorEvent) Err() error {
+	if e.cause != nil {
+		return e.cause
+	}
+	return fmt.Errorf("[%s] %s", e.Error.Code, e.Error.Message)
 }
 
 type StreamErrorData struct {
